@@ -1,0 +1,13 @@
+# Key to sign the app
+KEY_PATH = debug.keystore
+KEY_NAME = androiddebugkey
+KEY_PASS = android
+
+# SDK tools version
+SDK_VER = 24
+SDK     = 24.0.3
+
+# Roots
+SDK_ROOT  = ~/Android/Sdk
+JAVA_HOME = /usr/lib/jvm/java-1.11.0-openjdk-amd64
+

@@ -1,0 +1,5 @@
+/config.mk
+gen/
+*.keystore
+out.apk
+*.tmp
