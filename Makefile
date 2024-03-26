@@ -1,51 +1,80 @@
 # Application information
-NAME = Hello
-CLASS= com.example.hello
+# Read from manifest
+CLASS= $(shell grep -Po '(?<=package=")[^"]+' AndroidManifest.xml)
+MIN_SDK= $(shell grep -Po '(?<=android:minSdkVersion=")[^"]+' AndroidManifest.xml)
+MAX_SDK= $(shell grep -Po '(?<=android:targetSdkVersion=")[^"]+' AndroidManifest.xml)
 
 include config.mk
 
-# Android framework, DO NOT REMOVE!
-VEDBASE = $(SDK_ROOT)/platforms/android-$(SDK_VER)/android.jar
-
-# Tools
-ADB       = $(SDK_ROOT)/platform-tools/adb
-AAPT      = $(SDK_ROOT)/build-tools/$(SDK)/aapt
-DX        = $(SDK_ROOT)/build-tools/$(SDK)/dx
-ZIPALIGN  = $(SDK_ROOT)/build-tools/$(SDK)/zipalign
-JAVAC     = $(JAVA_HOME)/bin/javac
-JARSIGNER = $(JAVA_HOME)/bin/jarsigner
-
 # All sources
 SRC = $(shell find src/ -name '*.java')
-CLSS= $(SRC:src/%.java=gen/%.class)
+CLSS= $(SRC:src/%.java=work/java/%.class)
+RES = $(wildcard res/*/*)
 
 all: build
-build: out.apk
+build: work/out.apk
 
-out.apk: AndroidManifest.xml gen/classes.dex $(KEY_PATH)
-	@$(AAPT) p -I $(VEDBASE) -fM AndroidManifest.xml -S res/ -F $@.tmp
-	@cp gen/classes.dex . && $(AAPT) a $@.tmp classes.dex && rm -f classes.dex
+work/out.apk: AndroidManifest.xml work/classes.dex work/res.apk $(KEY_PATH)
+	@mkdir -p work
+	@cp work/res.apk $@.tmp
+	@zip -ju $@.tmp work/classes.dex
+#	@zip -ur $@.tmp assets lib
+ifneq ($(APKSIGNER),)
+# zipalign strictly before apksigner (but after jarsigner)
+	@$(ZIPALIGN) -f 4 $@.tmp $@
+	@$(APKSIGNER) sign --ks $(KEY_PATH) --ks-pass 'pass:$(KEY_PASS)' --min-sdk-version=$(MIN_SDK) --max-sdk-version=$(MAX_SDK)  $@
+else
+# Use jarsigner instead of apksigner
+# because apksigner produces bigger apk
 	@$(JARSIGNER) -keystore $(KEY_PATH) -storepass '$(KEY_PASS)' $@.tmp $(KEY_NAME)
-	-@$(ZIPALIGN) -f 4 $@.tmp $@
+	@$(ZIPALIGN) -f 4 $@.tmp $@
+endif
+	-@rm $@.tmp
 
-	-@if [ ! -r "$@" ]; then mv -f $@.tmp $@; fi
+work/classes.dex: $(RES_OUT) $(CLSS)
+	-@echo Generating classes.dex
+	@$(D8) --release --output work --min-api $(MIN_SDK) --lib $(VEDBASE) $$(find work/java -name '*.class' -not -name 'R.class' -not -name 'R$$*.class')
 
-gen/classes.dex: prepare $(CLSS)
-	-@echo removing R classes to economy some space
-	@find gen/ -name 'R.class' -exec rm {} \;
-	@find gen/ -name 'R$$*.class' -exec rm {} \;
-	@$(DX) --dex --output=$@ gen/
+### Resources
+
+# Fix extensions and path
+# values/% becomes values_%.arsc.flat
+# etc/% becomes etc_%.flat
+## NOTE: $V is template variable
+_RES_FIX=	$(subst /,_,$(if $(filter values%,$V),$(V:%.xml=%.arsc),$V)).flat
+
+# Use stable ids with libraries
+work/ids.txt: $(RES) $(LIBS)
+	@echo> $@
+# uncomment this if you want to have libraries
+#	$(foreach L,$(LIBS),cat $(ROOTDIR)/$L/work/R.txt >> work/ids.txt)
+#	@sed 's/^.*:/$(CLASS):/g' $@
+
+#RES+=		$(foreach V,$(subst $(APPDIR)/src/res/,,$(RES_SRC)),$(WRKDIR)/res/$(_RES_FIX))
+
+AAPT2_FLAGS = -o $@ --stable-ids work/ids.txt -I $(AAPT2JAR) --auto-add-overlay --manifest AndroidManifest.xml $(LIBS_RES) $(RES_OUT)
+
+define _mkRes
+RES_OUT += $2
+$2: $1
+	-@echo Compiling resource $1
+	@$(AAPT2) compile -o $(dir $2) $1
+endef
+$(shell mkdir -p work/res)
+$(foreach V,$(subst res/,,$(RES)),\
+	$(eval $(call _mkRes,res/$V,work/res/$(_RES_FIX))))
+
+work/res.apk: AndroidManifest.xml $(RES_OUT) work/ids.txt
+	-@echo Generating res.apk and R.java
+	@mkdir -p work/java
+# emit-ids here for libraries
+	@$(AAPT2) link --emit-ids work/R.txt --java work/java $(AAPT2_FLAGS)
 
 ### Helpers
 
-prepare: res/*
-	-@echo Generating R.java
-	@mkdir -p gen
-	@$(AAPT) p -I $(VEDBASE) -fm -M AndroidManifest.xml -J gen -S res
-
-gen/%.class: src/%.java
-	-@echo Recompiling $@
-	@$(JAVAC) -classpath $(VEDBASE) -sourcepath 'src/:gen/' -d 'gen/' $< -source 1.7 -target 1.7 > /dev/null 2>&1
+work/java/%.class: src/%.java work/res.apk
+	-@echo Compiling $<
+	@$(JAVAC) -classpath $(VEDBASE) -sourcepath 'src/:work/java/' -d 'work/java/' $< -source 8 -target 8 -Xlint:-options
 
 $(KEY_PATH):
 	@yes | keytool -genkey -v -keystore $(KEY_PATH) -storepass '$(KEY_PASS)' -alias $(KEY_NAME) -keypass $(KEY_PASS) -keyalg RSA -keysize 2048 -validity 10000
@@ -53,10 +82,9 @@ $(KEY_PATH):
 ### Tools
 
 clean:
-	rm -rf gen/ classes.dex out.apk out.apk.tmp
+	rm -rf work/
 
-deploy: out.apk
-	-@$(ADB) uninstall $(CLASS)
-	@$(ADB) install $<
-	@$(ADB) shell monkey -p $(CLASS) -c android.intent.category.LAUNCHER 1
-
+deploy: work/out.apk
+	@$(PM) uninstall $(CLASS)
+	@$(PM) install $<
+	@$(MONKEY) -p $(CLASS) -c android.intent.category.LAUNCHER 1

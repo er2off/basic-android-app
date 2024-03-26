@@ -1,5 +1,3 @@
 /config.mk
-gen/
+work/
 *.keystore
-out.apk
-*.tmp

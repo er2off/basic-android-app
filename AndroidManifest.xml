@@ -6,11 +6,11 @@
 
   <uses-sdk
     android:minSdkVersion="11"
-    android:targetSdkVersion="32" />
+    android:targetSdkVersion="34" />
 
   <application
     android:icon="@drawable/icon"
-    android:label="Hello">
+    android:label="@string/app_name">
     <activity
       android:theme="@android:style/Theme.Holo"
       android:name=".MainActivity">
